@@ -4,8 +4,15 @@ LOGFILE="/var/log/pve-shutdown.log"
 UPS_NAME="apc-modem@ip.address.of.nut.server"
 GRACE_PERIOD=180
 CHECK_INTERVAL=10
+STATE_FILE="/var/lib/proxmox-running-state.txt"
 
 echo "[$(date)] Starting Proxmox shutdown procedure via NUT" >> "$LOGFILE"
+
+# Save state of currently running VMs and containers
+echo "[$(date)] Saving state of running VMs and containers" >> "$LOGFILE"
+> "$STATE_FILE"  # Clear existing state file
+qm list | awk 'NR>1 && $3=="running" {print "VM:" $1}' >> "$STATE_FILE"
+pct list | awk 'NR>1 && $3=="running" {print "CT:" $1}' >> "$STATE_FILE"
 
 echo "[$(date)] Shutting down all VMs..." >> "$LOGFILE"
 for vmid in $(qm list | awk 'NR>1 {print $1}'); do
@@ -42,15 +49,25 @@ while [ $remaining -gt 0 ]; do
 
     if echo "$status" | grep -q "OL"; then
         echo "[$(date)] Power returned. Canceling shutdown." >> "$LOGFILE"
-        for vmid in $(qm list | awk 'NR>1 {print $1}'); do
-            echo "[$(date)] Restarting VM ID $vmid" >> "$LOGFILE"
-            qm start $vmid
-        done
 
-        for ctid in $(pct list | awk 'NR>1 {print $1}'); do
-            echo "[$(date)] Restarting CT ID $ctid" >> "$LOGFILE"
-            pct start $ctid
-        done
+        # Only restart VMs/containers that were running before
+        if [ -f "$STATE_FILE" ] && [ -s "$STATE_FILE" ]; then
+            echo "[$(date)] Restoring previously running guests from state file" >> "$LOGFILE"
+            while IFS=: read -r type id; do
+                case "$type" in
+                    VM)
+                        echo "[$(date)] Restarting VM ID $id" >> "$LOGFILE"
+                        qm start "$id"
+                        ;;
+                    CT)
+                        echo "[$(date)] Restarting CT ID $id" >> "$LOGFILE"
+                        pct start "$id"
+                        ;;
+                esac
+            done < "$STATE_FILE"
+        else
+            echo "[$(date)] No state file found. No guests to restore." >> "$LOGFILE"
+        fi
 
         echo "[$(date)] Shutdown canceled. System remains up." >> "$LOGFILE"
         exit 0

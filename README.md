@@ -62,19 +62,62 @@ Schedules actions on power events:
 
 ### `pve-shutdown.sh`
 
-1. Shuts down all VMs and containers.
-2. Waits up to 5 minutes for graceful shutdown.
-3. Waits a configurable **grace period** (default: 180 seconds).
-4. Cancels shutdown and restarts services if power returns.
-5. Executes `shutdown -h now` if not.
+1. **Saves state** of currently running VMs and containers to `/var/lib/proxmox-running-state.txt`.
+2. Shuts down all VMs and containers.
+3. Waits up to 5 minutes for graceful shutdown.
+4. Waits a configurable **grace period** (default: 180 seconds).
+5. If power returns during grace period:
+   - **Only restarts VMs/containers that were running before** (reads state file).
+   - Cancels shutdown, system remains up.
+6. If power not restored: Executes `shutdown -h now`.
+
+---
+
+## 🔍 State Preservation Feature
+
+The `pve-shutdown.sh` script includes intelligent state preservation to prevent unnecessary VM/container restarts:
+
+### How It Works
+
+**Power Loss Detected**:
+1. Script saves list of running VMs/containers to state file
+2. Format: `VM:100`, `CT:200`, etc.
+3. All VMs/containers shut down gracefully
+4. Grace period begins (180 seconds)
+
+**Power Restored During Grace Period**:
+1. Script detects UPS back online (`ups.status = OL`)
+2. Reads state file
+3. **Only restarts VMs/containers that were running before**
+4. VMs that were intentionally stopped remain stopped
+
+**Power Not Restored**:
+1. Grace period expires
+2. Node shuts down cleanly
+
+### State File Location
+
+`/var/lib/proxmox-running-state.txt`
+
+This file is automatically created/updated each time the shutdown script runs.
+
+### Benefits
+
+- **Prevents unwanted restarts**: Only previously running VMs/containers start
+- **Respects intentional states**: Stopped VMs remain stopped
+- **Reduces resource waste**: No unnecessary VM startups
+- **Maintains system state**: System returns to expected configuration
 
 ---
 
 ## 🔄 Testing the Setup
 
-1. Simulate a power failure by disconnecting the UPS from wall power.
-2. Observe `/var/log/upssched.log` and `/var/log/pve-shutdown.log`.
-3. Confirm proper shutdown behavior and power restoration handling.
+1. **Stop a few VMs/containers** before testing (to verify they don't restart).
+2. Simulate a power failure by disconnecting the UPS from wall power.
+3. Observe `/var/log/upssched.log` and `/var/log/pve-shutdown.log`.
+4. **Reconnect power during grace period** (within 180 seconds).
+5. Verify only previously running VMs/containers restart.
+6. Check state file: `cat /var/lib/proxmox-running-state.txt`
 
 ---
 
